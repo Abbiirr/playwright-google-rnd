@@ -1,0 +1,8 @@
+
+.idea/
+
+results/
+browser_profiles/
+browser_profiles/google_account/BrowserMetrics/
+
+__pycache__/

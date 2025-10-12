@@ -1,200 +1,113 @@
 """
-Simple Google Search with Playwright - No FastAPI
+Simple Google Search Scraper with Anti-Detection
 """
 
 import asyncio
-import json
-from datetime import datetime
-from pathlib import Path
-from typing import List, Dict
-from playwright.async_api import async_playwright, Page
+import random
+from playwright.async_api import async_playwright
 
-# Setup paths
-STORAGE_STATE_PATH = Path("auth.json")
-RESULTS_DIR = Path("results")
-RESULTS_DIR.mkdir(exist_ok=True)
-
-
-async def handle_consent(page: Page):
-    """Click Google consent if present"""
-    try:
-        consent_button = await page.wait_for_selector("#L2AGLb", timeout=2000)
-        if consent_button:
-            await consent_button.click()
-            await page.wait_for_load_state("networkidle", timeout=5000)
-            print("✓ Accepted consent")
-    except:
-        pass  # No consent needed
-
-
-async def detect_captcha(page: Page) -> bool:
-    """Check for CAPTCHA/unusual traffic"""
-    indicators = ["text=/unusual traffic/i", "#captcha", ".g-recaptcha"]
-    for indicator in indicators:
-        if await page.query_selector(indicator):
-            return True
-    return False
-
-
-async def parse_results(page: Page, max_results: int = 10) -> List[Dict]:
-    """Extract search results"""
-    results = []
-
-    # Wait for results container
-    await page.wait_for_selector("#search", timeout=10000)
-
-    # Get all organic results
-    elements = await page.query_selector_all("#search a:has(h3)")
-
-    for i, element in enumerate(elements[:max_results]):
-        try:
-            # Title
-            h3 = await element.query_selector("h3")
-            title = await h3.inner_text() if h3 else ""
-
-            # URL
-            url = await element.get_attribute("href") or ""
-
-            # Snippet
-            parent = await element.evaluate_handle("el => el.closest('.g')")
-            snippet_elem = await parent.query_selector(".VwiC3b, [data-sncf='2']")
-            snippet = await snippet_elem.inner_text() if snippet_elem else ""
-
-            if title and url:
-                results.append({
-                    "position": i + 1,
-                    "title": title.strip(),
-                    "url": url,
-                    "snippet": snippet.strip()
-                })
-                print(f"  [{i + 1}] {title[:60]}...")
-        except Exception as e:
-            continue
-
-    return results
-
-
-async def search_google(query: str, max_results: int = 10):
-    """Perform a single Google search"""
-    print(f"\n🔍 Searching: '{query}'")
+async def search_google(query: str):
+    print(f"Searching: {query}")
 
     async with async_playwright() as p:
-        # Launch browser
+        # Launch browser - headless=False reduces detection
         browser = await p.chromium.launch(
             headless=False,
-            slow_mo=1000,
             args=['--disable-blink-features=AutomationControlled']
         )
 
-        # Create or load context
-        if STORAGE_STATE_PATH.exists():
-            context = await browser.new_context(
-                storage_state=str(STORAGE_STATE_PATH),
-                viewport={'width': 1920, 'height': 1080}
-            )
-            print("✓ Loaded saved session")
-        else:
-            context = await browser.new_context(
-                viewport={'width': 1920, 'height': 1080}
-            )
+        # Create context with real browser fingerprint
+        context = await browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+
+        # Inject anti-detection script
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
 
         page = await context.new_page()
 
         try:
-            # Navigate to Google
-            url = f"https://www.google.com/search?q={query}"
-            await page.goto(url, wait_until="domcontentloaded")
+            # Go to Google
+            await page.goto("https://www.google.com")
+            await asyncio.sleep(2)  # Wait for page to settle
 
-            # Handle consent
-            await handle_consent(page)
+            # Search
+            search_box = page.locator('[name="q"]')
+            await search_box.click()
 
-            # Check for CAPTCHA
-            if await detect_captcha(page):
-                print("❌ CAPTCHA detected - stopping")
-                await page.screenshot(path="debug_captcha.png")
-                return []
+            # Type with human-like delays
+            for char in query:
+                await search_box.type(char, delay=random.randint(100, 200))
 
-            # Parse results
-            results = await parse_results(page, max_results)
+            await asyncio.sleep(1)
+            await page.keyboard.press("Enter")
 
-            # Save session state
-            await context.storage_state(path=str(STORAGE_STATE_PATH))
+            # Wait for results
+            await asyncio.sleep(5)
+            await page.wait_for_selector("#search", timeout=30000)
+            await asyncio.sleep(5)
 
-            # Save results to file
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_query = "".join(c if c.isalnum() else "_" for c in query)[:50]
-            output_file = RESULTS_DIR / f"{safe_query}_{timestamp}.json"
+            # Extract results - using the actual selector from your HTML
+            results = []
 
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "query": query,
-                    "timestamp": timestamp,
-                    "results_count": len(results),
-                    "results": results
-                }, f, indent=2, ensure_ascii=False)
+            # Try to get result containers
+            result_divs = await page.locator('.wHYlTd').all()
 
-            print(f"✓ Found {len(results)} results")
-            print(f"✓ Saved to {output_file.name}")
+            for i, div in enumerate(result_divs[:10], 1):
+                try:
+                    # Get title
+                    title_elem = div.locator('h3')
+                    if await title_elem.count() > 0:
+                        title = await title_elem.text_content()
 
+                        # Get link
+                        link_elem = div.locator('a[href]').first
+                        link = await link_elem.get_attribute('href') if await link_elem.count() > 0 else ""
+
+                        # Get snippet
+                        snippet = ""
+                        snippet_elem = div.locator('.VwiC3b')
+                        if await snippet_elem.count() > 0:
+                            snippet = await snippet_elem.text_content()
+
+                        results.append({
+                            'position': i,
+                            'title': title.strip(),
+                            'link': link,
+                            'snippet': snippet.strip() if snippet else ""
+                        })
+
+                        print(f"[{i}] {title[:60]}...")
+                except:
+                    continue
+
+            print(f"Found {len(results)} results")
             return results
 
         except Exception as e:
-            print(f"❌ Error: {e}")
-            await page.screenshot(path="debug_error.png")
+            print(f"Error: {e}")
+            await page.screenshot(path="error.png")
             return []
+
         finally:
             await browser.close()
 
-
-async def batch_search():
-    """Run multiple searches with delay"""
-    queries = [
-        "site:python.org playwright tutorial",
-        "playwright vs selenium 2024",
-        "web scraping best practices",
-        "asyncio python windows",
-        "fastapi websocket example"
-    ]
-
-    all_results = {}
-
-    for i, query in enumerate(queries):
-        results = await search_google(query, max_results=5)
-        all_results[query] = results
-
-        # Delay between searches (except last)
-        if i < len(queries) - 1:
-            print(f"⏳ Waiting 3 seconds...")
-            await asyncio.sleep(3)
-
-    # Save combined results
-    output_file = RESULTS_DIR / f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(all_results, f, indent=2, ensure_ascii=False)
-
-    print(f"\n📊 Batch complete! Saved to {output_file.name}")
-    return all_results
-
-
 async def main():
-    """Main entry point"""
-    print("=== Playwright Google Search Test ===")
+    results = await search_google("playwright python examples")
 
-    # Single search
-    await search_google("playwright python examples", max_results=3)
-
-    # Wait before batch
-    print("\n⏳ Waiting 5 seconds before batch...")
-    await asyncio.sleep(5)
-
-    # Batch search
-    await batch_search()
-
+    if results:
+        print("\nResults:")
+        for r in results:
+            print(f"\n{r['position']}. {r['title']}")
+            print(f"   {r['link'][:80]}...")
 
 if __name__ == "__main__":
-    # Windows fix
     import sys
-
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 

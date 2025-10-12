@@ -259,7 +259,7 @@ async def search_google(query: str, max_results: int = 20):
 
         except Exception as e:
             print(f"Error: {e}")
-            await page.screenshot(path="error.png")
+            await page.screenshot(path="../error.png")
             search_data['error'] = str(e)
             return search_data
 
@@ -272,7 +272,7 @@ def save_to_json(data, filename=None):
     import os
 
     # Create results directory if it doesn't exist
-    results_dir = "results"
+    results_dir = "../results"
     os.makedirs(results_dir, exist_ok=True)
 
     if filename is None:

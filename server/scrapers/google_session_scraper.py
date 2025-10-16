@@ -34,18 +34,19 @@ class GoogleSearchWithSession:
         logger.info(f"Initialized GoogleSearchWithSession with profile: {profile_name}")
         logger.info(f"Profile path: {self.profile_path}")
 
-    async def search(self, query: str, max_results: int = 20, headless=False):
+    async def search(self, query: str, max_results: int = 20, headless=False, slowmo: int = 0):
         """Search Google using persistent profile"""
-        logger.info(f"Starting search for query: '{query}' (max_results={max_results}, headless={headless})")
+        logger.info(f"Starting search for query: '{query}' (max_results={max_results}, headless={headless}, slowmo={slowmo})")
 
         async with async_playwright() as p:
             logger.info("Playwright context manager started")
 
             try:
-                logger.info(f"Launching Chromium with persistent context from: {self.profile_path}")
+                logger.info(f"Launching Chromium with persistent context from: {self.profile_path}, slowmo={slowmo}")
                 context = await p.chromium.launch_persistent_context(
                     user_data_dir=str(self.profile_path),
                     headless=headless,
+                    slow_mo=slowmo,
                     args=['--disable-blink-features=AutomationControlled'],
                     viewport={'width': 1920, 'height': 1080},
                     user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'

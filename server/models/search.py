@@ -79,6 +79,7 @@ class SearchRequest(BaseModel):
     max_results: int = Field(20, ge=1, le=100, description="Maximum number of results")
     mode: SearchMode = Field(SearchMode.SESSION, description="Search mode (session/simple)")
     headless: bool = Field(True, description="Run browser in headless mode")
+    slowmo: int = Field(0, ge=0, description="Slow motion delay in milliseconds (e.g., 1000 for 1 second delay between actions)")
     save_to_file: bool = Field(False, description="Save results to JSON file")
     profile_name: str = Field("api_google_profile", description="Browser profile name from browser_profiles directory")
 
@@ -88,6 +89,7 @@ class BatchSearchRequest(BaseModel):
     max_results: int = Field(20, ge=1, le=100, description="Maximum results per query")
     mode: SearchMode = Field(SearchMode.SESSION, description="Search mode")
     headless: bool = Field(True, description="Run browser in headless mode")
+    slowmo: int = Field(0, ge=0, description="Slow motion delay in milliseconds (e.g., 1000 for 1 second delay between actions)")
     delay_min: int = Field(5, ge=1, description="Minimum delay between searches (seconds)")
     delay_max: int = Field(10, ge=1, description="Maximum delay between searches (seconds)")
     profile_name: str = Field("api_google_profile", description="Browser profile name from browser_profiles directory")

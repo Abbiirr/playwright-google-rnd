@@ -51,26 +51,27 @@ class SearchService:
             max_results: int = 20,
             mode: SearchMode = SearchMode.SESSION,
             headless: bool = True,
+            slowmo: int = 0,
             save_to_file: bool = False,
             profile_name: str = "api_google_profile"
     ) -> SearchResponse:
         """Perform a single search"""
-        logger.info(f"search_single called: query='{query}', max_results={max_results}, mode={mode}, headless={headless}, save_to_file={save_to_file}, profile_name='{profile_name}'")
+        logger.info(f"search_single called: query='{query}', max_results={max_results}, mode={mode}, headless={headless}, slowmo={slowmo}, save_to_file={save_to_file}, profile_name='{profile_name}'")
 
         try:
             # Execute search based on mode
             if mode == SearchMode.SESSION:
-                logger.info(f"Using SESSION mode scraper with profile: '{profile_name}'")
+                logger.info(f"Using SESSION mode scraper with profile: '{profile_name}' and slowmo: {slowmo}")
                 # Create scraper instance with specified profile
                 session_scraper = GoogleSearchWithSession(profile_name)
                 search_data = await session_scraper.search(
-                    query, max_results, headless
+                    query, max_results, headless, slowmo
                 )
             else:
-                logger.info(f"Using SIMPLE mode scraper for query: '{query}'")
+                logger.info(f"Using SIMPLE mode scraper for query: '{query}' with slowmo: {slowmo}")
                 simple_scraper = GoogleSimpleScraper()
                 search_data = await simple_scraper.search(
-                    query, max_results
+                    query, max_results, slowmo
                 )
 
             logger.debug(f"Search data received, checking for errors")
@@ -125,12 +126,13 @@ class SearchService:
             max_results: int = 20,
             mode: SearchMode = SearchMode.SESSION,
             headless: bool = True,
+            slowmo: int = 0,
             delay_min: int = 5,
             delay_max: int = 10,
             profile_name: str = "api_google_profile"
     ) -> List[SearchResponse]:
         """Perform batch search"""
-        logger.info(f"search_batch called: {len(queries)} queries, mode={mode}, delay={delay_min}-{delay_max}s, profile_name='{profile_name}'")
+        logger.info(f"search_batch called: {len(queries)} queries, mode={mode}, slowmo={slowmo}, delay={delay_min}-{delay_max}s, profile_name='{profile_name}'")
         logger.debug(f"Queries: {queries}")
 
         results = []
@@ -143,6 +145,7 @@ class SearchService:
                 max_results=max_results,
                 mode=mode,
                 headless=headless,
+                slowmo=slowmo,
                 save_to_file=False,
                 profile_name=profile_name
             )

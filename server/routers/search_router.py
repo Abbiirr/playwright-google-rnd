@@ -62,6 +62,7 @@ async def search(request: SearchRequest):
             max_results=request.max_results,
             mode=request.mode,
             headless=request.headless,
+            slowmo=request.slowmo,
             save_to_file=request.save_to_file,
             profile_name=request.profile_name
         )
@@ -78,17 +79,19 @@ async def search_get(
         max_results: int = Query(20, ge=1, le=100),
         mode: SearchMode = Query(SearchMode.SESSION),
         headless: bool = Query(True),
+        slowmo: int = Query(0, ge=0, description="Slow motion delay in milliseconds (e.g., 1000 for 1 second delay between actions)"),
         profile_name: str = Query("api_google_profile", description="Browser profile name")
 ):
     """GET endpoint for single search - useful for testing"""
     logger.info(f"GET /api/search - Received search request: q='{q}', profile='{profile_name}'")
-    logger.debug(f"Query params: max_results={max_results}, mode={mode}, headless={headless}, profile_name={profile_name}")
+    logger.debug(f"Query params: max_results={max_results}, mode={mode}, headless={headless}, slowmo={slowmo}, profile_name={profile_name}")
 
     request = SearchRequest(
         query=q,
         max_results=max_results,
         mode=mode,
         headless=headless,
+        slowmo=slowmo,
         save_to_file=False,
         profile_name=profile_name
     )
@@ -98,7 +101,7 @@ async def search_get(
 @router.post("/batch", response_model=BatchSearchResponse)
 async def batch_search(request: BatchSearchRequest):
     """Perform multiple Google searches sequentially"""
-    logger.info(f"POST /api/search/batch - Received batch request: {len(request.queries)} queries, profile='{request.profile_name}'")
+    logger.info(f"POST /api/search/batch - Received batch request: {len(request.queries)} queries, profile='{request.profile_name}', slowmo={request.slowmo}")
     logger.debug(f"Batch request details: {request.model_dump()}")
 
     try:
@@ -107,6 +110,7 @@ async def batch_search(request: BatchSearchRequest):
             max_results=request.max_results,
             mode=request.mode,
             headless=request.headless,
+            slowmo=request.slowmo,
             delay_min=request.delay_min,
             delay_max=request.delay_max,
             profile_name=request.profile_name

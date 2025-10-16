@@ -26,17 +26,18 @@ class GoogleSimpleScraper:
     def __init__(self):
         logger.info("Initialized GoogleSimpleScraper")
 
-    async def search(self, query: str, max_results: int = 20):
+    async def search(self, query: str, max_results: int = 20, slowmo: int = 0):
         """Simple Google search without persistent session"""
-        logger.info(f"Starting simple search for query: '{query}' (max_results={max_results})")
+        logger.info(f"Starting simple search for query: '{query}' (max_results={max_results}, slowmo={slowmo})")
 
         async with async_playwright() as p:
             logger.info("Playwright context manager started")
 
             try:
-                logger.info("Launching Chromium browser")
+                logger.info(f"Launching Chromium browser with slowmo={slowmo}")
                 browser = await p.chromium.launch(
                     headless=False,
+                    slow_mo=slowmo,
                     args=['--disable-blink-features=AutomationControlled']
                 )
                 logger.info("Browser launched successfully")

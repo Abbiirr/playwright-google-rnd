@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
 """
-google_cli_scraper.py
-Single-file, modular Playwright scraper with optional Google login.
+google_search.py
+Single-file, modular Playwright scraper with optional Google login,
+now with detailed console logging.
 
 Requirements:
   pip install playwright==1.* rich
   playwright install chromium
 
 Examples:
-  # Reuse/create a persistent profile, headless, and scrape 10 results
-  python google_cli_scraper.py --query "site:playwright.dev launch_persistent_context" \
-      --profile-name my_profile --headless --max-results 10
-
-  # Do an INTERACTIVE login (opens a visible browser), then scrape
-  GOOGLE_EMAIL="user@gmail.com" GOOGLE_PASSWORD="app-password" \
-  python google_cli_scraper.py --query "Bangladesh fintech news" \
-      --profile-name bank_ops --login --no-headless --slowmo 200
-
-  # Save results to a file
-  python google_cli_scraper.py -q "pixijs webgpu" -o results.json
+  python google_search.py -q "pixijs webgpu" -v
+  python google_search.py -q "Bangladesh fintech news" --no-headless --slowmo 200 -vv
 """
 
 import os
@@ -28,21 +20,51 @@ import time
 import asyncio
 import logging
 import argparse
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-from urllib.parse import urlparse
-import re
 from urllib.parse import urlparse, quote_plus
 
 from playwright.async_api import async_playwright
 
 # ---------- Logging ----------
 def setup_logging(verbosity: int) -> None:
+    """Console logging with optional RichHandler, level via -v / -vv."""
     level = logging.WARNING if verbosity == 0 else logging.INFO if verbosity == 1 else logging.DEBUG
-    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+    handlers = []
+    try:
+        from rich.logging import RichHandler  # pretty console logs
+        handlers.append(RichHandler(rich_tracebacks=True, show_time=True, show_level=True, show_path=False))
+        fmt = "%(message)s"
+        datefmt = "[%X]"
+    except Exception:
+        handlers.append(logging.StreamHandler())
+        fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+        datefmt = "%Y-%m-%d %H:%M:%S"
+    logging.basicConfig(level=level, format=fmt, datefmt=datefmt, handlers=handlers)
 
 log = logging.getLogger("google_cli_scraper")
+
+def _mask(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    return s[:2] + "***" if len(s) > 2 else "***"
+
+def _args_snapshot(args) -> Dict[str, Any]:
+    return {
+        "query": args.query,
+        "max_results": args.max_results,
+        "profile_name": args.profile_name,
+        "profiles_dir": str(Path(args.profiles_dir).expanduser().resolve()),
+        "headless": args.headless,
+        "slowmo_ms": args.slowmo,
+        "login": args.login,
+        "email": args.email,
+        "password": _mask(args.password),
+        "out": args.out,
+        "verbose": args.verbose,
+    }
 
 # ---------- Files & Profiles ----------
 def ensure_profile_dir(base: Path, name: str) -> Path:
@@ -56,15 +78,18 @@ def save_json(obj: Dict[str, Any], out_path: Optional[str]) -> None:
         return
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, ensure_ascii=False)
-    log.info("Saved %s", out_path)
+    log.info("✅ Saved results -> %s", out_path)
 
 # ---------- Browser ----------
 async def launch_context(p, profile_path: Path, headless: bool, slowmo: int):
     """
     Use a persistent context so cookies/sessions are reused across runs.
+    (Playwright persistent context stores data in user_data_dir.) :contentReference[oaicite:1]{index=1}
     """
-    # Playwright doc: browser_type.launch_persistent_context(user_data_dir, **kwargs)
-    # https://playwright.dev/python/docs/api/class-browsertype
+    log.info("🚀 Launching Chromium persistent context")
+    log.debug("   user_data_dir=%s", profile_path)
+    log.debug("   headless=%s slow_mo=%sms viewport=1280x900", headless, slowmo)
+    t0 = time.perf_counter()
     context = await p.chromium.launch_persistent_context(
         user_data_dir=str(profile_path),
         headless=headless,
@@ -73,7 +98,19 @@ async def launch_context(p, profile_path: Path, headless: bool, slowmo: int):
         args=["--disable-blink-features=AutomationControlled"],
     )
     page = await context.new_page()
+    dt = (time.perf_counter() - t0) * 1000
+    log.info("✅ Browser ready in %.0f ms", dt)
     return context, page
+
+def attach_console_and_network_listeners(page, verbose_level: int):
+    # Mirror page console messages to Python console. :contentReference[oaicite:2]{index=2}
+    page.on("console", lambda msg: log.debug("PAGE.console(%s): %s", msg.type, msg.text))
+    page.on("pageerror", lambda exc: log.error("PAGE.error: %s", exc))
+
+    # Very verbose network logs (only on -vv)
+    if verbose_level >= 2:
+        page.on("request",  lambda r: log.debug("➡️  %s %s", r.method, r.url))
+        page.on("response", lambda r: log.debug("⬅️  %s %s", r.status, r.url))
 
 # ---------- Google Login (optional) ----------
 async def google_login(page, email: str, password: str, interactive_wait: bool = True):
@@ -81,101 +118,121 @@ async def google_login(page, email: str, password: str, interactive_wait: bool =
     Best-effort login flow. If 2FA is enabled, keep the browser VISIBLE and
     complete it manually, then press Enter in the terminal to continue.
     """
-    log.info("Starting Google login flow...")
+    log.info("🔐 Starting Google login flow …")
+    t0 = time.perf_counter()
     await page.goto("https://accounts.google.com/signin/v2/identifier?hl=en")
+    log.debug("Waiting for email field …")
     await page.wait_for_selector('input[type="email"]', timeout=60000)
     await page.fill('input[type="email"]', email)
     await page.click('#identifierNext')
 
-    # Wait for password page
+    log.debug("Waiting for password field …")
     await page.wait_for_selector('input[type="password"]', timeout=60000)
     await page.fill('input[type="password"]', password)
     await page.click('#passwordNext')
 
-    # Either we land on an account page or encounter challenges (2FA/CAPTCHA)
-    # Let the user resolve anything interactive.
     if interactive_wait:
-        log.warning("If 2FA or a challenge appears, complete it in the browser window.")
-        log.warning("Press Enter here when the account appears logged in...")
+        log.warning("If 2FA/challenge appears, finish it in the browser window.")
+        log.warning("Press Enter here once you’re logged in …")
         try:
             input()
         except EOFError:
             pass
 
-    # Try to confirm login by visiting google.com
     await page.goto("https://www.google.com")
-    await page.wait_for_timeout(1500)
-    log.info("Login step finished (cannot guarantee success if challenges persist).")
+    await page.wait_for_timeout(500)
+    log.info("✅ Login step finished (challenges may still apply). took=%.0f ms", (time.perf_counter() - t0) * 1000)
+
+# ---------- Consent ----------
 async def accept_consent(page) -> None:
     """Handle both google.com and consent.google.com variants."""
-    # If we land on consent.google.com, wait for buttons
-    if "consent.google" in page.url:
+    url = page.url
+    log.debug("Consent check at %s", url)
+    if "consent.google" in url:
         try:
-            # Try common “Accept all”/“I agree” labels via ARIA role
             btn = page.get_by_role("button", name=re.compile(r"(Accept|I agree|Agree)", re.I))
-            if await btn.count():
+            n = await btn.count()
+            log.debug("consent.google buttons found: %s", n)
+            if n:
                 await btn.first.click()
                 await page.wait_for_load_state("domcontentloaded")
-        except Exception:
-            pass
+                log.info("✅ Accepted consent on consent.google.com")
+        except Exception as e:
+            log.debug("Consent (consent.google) bypass err: %s", e)
     else:
-        # In-page banner on google.com (region-specific)
         try:
             btn = page.locator('button:has-text("I agree"), button:has-text("Accept all"), #L2AGLb')
-            if await btn.count():
+            n = await btn.count()
+            log.debug("inline consent buttons found: %s", n)
+            if n:
                 await btn.first.click()
-                await page.wait_for_timeout(400)
-        except Exception:
-            pass
+                await page.wait_for_timeout(200)
+                log.info("✅ Accepted inline consent on google.com")
+        except Exception as e:
+            log.debug("Consent (inline) bypass err: %s", e)
+
 # ---------- Scraping ----------
 async def scrape_search(page, query: str, max_results: int = 10) -> Dict[str, Any]:
-    # Use stable params to reduce layout variance
+    t0 = time.perf_counter()
     home = "https://www.google.com/?hl=en&gl=us&pws=0"
+    log.info("🌐 Opening Google home: %s", home)
     await page.goto(home)
-    await page.wait_for_load_state("domcontentloaded")  # safer than arbitrary sleeps :contentReference[oaicite:2]{index=2}
+    await page.wait_for_load_state("domcontentloaded")
     await accept_consent(page)
 
-    # Type on the homepage; if it fails, fall back to direct /search URL
+    # Try typing; fallback to direct /search if needed.
     try:
-        box = page.locator('input[name="q"]')
+        log.info("⌨️  Typing query into homepage box …")
+        box = page.locator('textarea[name="q"], input[name="q"]')  # support both textarea and input
         await box.click()
         await box.fill(query)
         await page.keyboard.press("Enter")
         await page.wait_for_selector("div#search", timeout=15000)
-    except Exception:
-        # Fallback: navigate straight to the results page
+        log.info("🔎 Results page loaded (typed flow).")
+    except Exception as e:
+        log.debug("Typing failed (%s). Falling back to direct /search", e)
         search_url = f"https://www.google.com/search?hl=en&gl=us&pws=0&num={max_results}&q={quote_plus(query)}"
+        log.info("🌐 Opening direct results URL: %s", search_url)
         await page.goto(search_url)
         await page.wait_for_load_state("domcontentloaded")
         await accept_consent(page)
         await page.wait_for_selector("div#search", timeout=30000)
+        log.info("🔎 Results page loaded (direct URL).")
 
-    # Prefer robust selector: links that have an H3 (title)
-    link_results = page.locator('div#search a:has(h3)')  # using :has() locator pattern :contentReference[oaicite:3]{index=3}
+    # Extract results: links that have an H3 (title)
+    link_results = page.locator('div#search a:has(h3)')
     count = await link_results.count()
-    items: List[Dict[str, Any]] = []
+    log.info("📦 Found %d candidate result nodes", count)
 
+    items: List[Dict[str, Any]] = []
     for i in range(min(count, max_results)):
         try:
             link = link_results.nth(i)
             href = await link.get_attribute("href")
             title = await link.locator("h3").inner_text()
             if not (href and title.strip()):
+                log.debug("Result %d missing href/title", i + 1)
                 continue
             # Optional snippet: best-effort nearby text
-            snippet_el = link.locator("xpath=ancestor::div[contains(@class,'g')][1]//*[contains(@class,'VwiC3b') or @data-sncf='1']").first
+            snippet_el = link.locator(
+                "xpath=ancestor::div[contains(@class,'g')][1]//*[contains(@class,'VwiC3b') or @data-sncf='1']"
+            ).first
             snippet = (await snippet_el.inner_text()) if await snippet_el.count() else None
 
-            items.append({
+            item = {
                 "position": len(items) + 1,
                 "title": title.strip(),
                 "link": href,
                 "domain": urlparse(href).netloc,
                 "snippet": snippet.strip() if snippet else None
-            })
+            }
+            items.append(item)
+            log.debug("  #%02d %s | %s", item["position"], item["domain"], item["title"])
         except Exception as e:
-            log.debug("skip result %d: %s", i + 1, e)
+            log.debug("Skip result %d due to parse error: %s", i + 1, e)
 
+    dt = (time.perf_counter() - t0) * 1000
+    log.info("✅ Collected %d/%d results in %.0f ms", len(items), max_results, dt)
     return {
         "query": query,
         "timestamp": datetime.utcnow().isoformat(),
@@ -183,9 +240,9 @@ async def scrape_search(page, query: str, max_results: int = 10) -> Dict[str, An
         "results_count": len(items),
         "results": items
     }
+
 # ---------- CLI ----------
 def build_arg_parser() -> argparse.ArgumentParser:
-    # argparse docs: https://docs.python.org/3/library/argparse.html
     parser = argparse.ArgumentParser(
         description="Playwright-based Google scraper with optional login (persistent profile)."
     )
@@ -210,36 +267,41 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 async def run(args):
     setup_logging(args.verbose)
+    log.info("▶️  Starting google_search.py")
+    log.debug("Args: %s", _args_snapshot(args))
 
-    # Basic safety checks for login flow
+    # Safety checks for login flow
     if args.login:
         if args.headless:
             log.warning("Login works best with a VISIBLE browser. Consider adding --no-headless.")
         if not args.email or not args.password:
-            log.error("Login requested but no email/password supplied (via flags or env).")
+            log.error("Login requested but email/password missing (flags or env).")
             sys.exit(2)
 
-    profiles_root = Path(args.profiles_dir)
+    # Absolute profile path avoids confusion across runs. (General best practice.) :contentReference[oaicite:3]{index=3}
+    profiles_root = Path(args.profiles_dir).expanduser().resolve()
     profile_path = ensure_profile_dir(profiles_root, args.profile_name)
+    log.info("👤 Profile: %s", profile_path)
 
-    # Windows note: If you’re on Windows, Playwright handles event loop differences internally.
     async with async_playwright() as p:
         context, page = await launch_context(
             p, profile_path=profile_path, headless=args.headless, slowmo=args.slowmo
         )
+        attach_console_and_network_listeners(page, args.verbose)
 
         try:
             if args.login:
                 await google_login(page, args.email, args.password, interactive_wait=not args.headless)
-                # Save state for reuse
                 state_file = profile_path / "state.json"
                 await context.storage_state(path=str(state_file))
-                log.info("Saved browser storage state to %s", state_file)
+                log.info("💾 Saved browser storage state -> %s", state_file)
 
             data = await scrape_search(page, args.query, args.max_results)
             save_json(data, args.out)
         finally:
+            log.info("🧹 Closing browser context …")
             await context.close()
+            log.info("🏁 Done.")
 
 def main():
     parser = build_arg_parser()
@@ -254,6 +316,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 # CLI arguments (name → suggested value) — adjust as needed
 # --query            → "pixijs webgpu"                  # REQUIRED search string
